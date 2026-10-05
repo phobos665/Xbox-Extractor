@@ -36,9 +36,24 @@ if (fs.existsSync(out) && fs.statSync(out).mtimeMs > srcTime) {
 const configure = ["-S", src, "-B", build, "-DCMAKE_BUILD_TYPE=Release"];
 if (triple.startsWith("aarch64-apple-darwin")) configure.push("-DCMAKE_OSX_ARCHITECTURES=arm64");
 if (triple.startsWith("x86_64-apple-darwin")) configure.push("-DCMAKE_OSX_ARCHITECTURES=x86_64");
+// `tauri build --target universal-apple-darwin` wants one fat sidecar under this name.
+if (triple === "universal-apple-darwin") configure.push("-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64");
 if (triple.includes("apple-darwin")) configure.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
-if (triple.startsWith("aarch64-pc-windows")) configure.push("-A", "ARM64");
-if (triple.startsWith("x86_64-pc-windows")) configure.push("-A", "x64");
+if (triple.includes("windows")) {
+  if (process.platform === "win32") {
+    // Visual Studio, as upstream extract-xiso's own CI builds it.
+    configure.push("-A", triple.startsWith("aarch64") ? "ARM64" : "x64");
+  } else {
+    // Cross-building on macOS or Linux (to check a Windows build before CI): mingw-w64,
+    // statically linked so the .exe needs no MinGW runtime DLLs.
+    const cc = `${triple.startsWith("aarch64") ? "aarch64" : "x86_64"}-w64-mingw32-gcc`;
+    configure.push(
+      "-DCMAKE_SYSTEM_NAME=Windows",
+      `-DCMAKE_C_COMPILER=${cc}`,
+      "-DCMAKE_EXE_LINKER_FLAGS=-static",
+    );
+  }
+}
 
 const run = (args) => execFileSync("cmake", args, { stdio: "inherit" });
 console.log(`extract-xiso: building for ${triple}`);
@@ -53,6 +68,14 @@ if (!built) {
   process.exit(1);
 }
 fs.mkdirSync(outDir, { recursive: true });
-fs.copyFileSync(built, out);
-fs.chmodSync(out, 0o755);
-console.log(`extract-xiso: ${path.relative(root, out)}`);
+// A universal build compiles each architecture on its own, and each half looks for a sidecar
+// under its own triple as well as the universal one. The fat binary serves all three.
+const names =
+  triple === "universal-apple-darwin"
+    ? [out, ...["aarch64-apple-darwin", "x86_64-apple-darwin"].map((t) => path.join(outDir, `extract-xiso-${t}`))]
+    : [out];
+for (const name of names) {
+  fs.copyFileSync(built, name);
+  fs.chmodSync(name, 0o755);
+  console.log(`extract-xiso: ${path.relative(root, name)}`);
+}

@@ -1,27 +1,23 @@
-name: build
+name: release
+
+# Push a tag named after the version in app/src-tauri/tauri.conf.json (e.g. v0.1.0), or run by
+# hand. Builds the macOS and Windows apps and attaches them to a draft release, to review and
+# publish on GitHub.
 
 on:
   push:
-    branches: [master, main]
-  pull_request:
+    tags: ["v*"]
   workflow_dispatch:
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # The Tauri crate needs WebKitGTK on Linux; the libraries and CLI do not.
-      - run: cargo test -p xbe -p xib-core -p xib-cli
+permissions:
+  contents: write
 
-  app:
+jobs:
+  release:
     strategy:
       fail-fast: false
       matrix:
         include:
-          # One app for Apple Silicon and Intel.
           - os: macos-latest
             target: universal-apple-darwin
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -30,7 +26,6 @@ jobs:
             rust-targets: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     env:
-      # Read by app/scripts/build-sidecar.mjs so extract-xiso is built for the same target.
       TAURI_ENV_TARGET_TRIPLE: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
@@ -48,13 +43,18 @@ jobs:
           cache-dependency-path: app/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
         working-directory: app
-      - run: pnpm tauri build --target ${{ matrix.target }}
-        working-directory: app
-      - uses: actions/upload-artifact@v4
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: xbox-iso-batcher-${{ matrix.target }}
-          if-no-files-found: error
-          path: |
-            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            target/${{ matrix.target }}/release/bundle/msi/*.msi
-            target/${{ matrix.target }}/release/bundle/nsis/*.exe
+          projectPath: app
+          tauriScript: pnpm tauri
+          args: --target ${{ matrix.target }}
+          tagName: v__VERSION__
+          releaseName: Xbox ISO Batcher v__VERSION__
+          releaseBody: |
+            macOS: open the .dmg and drag the app to Applications. The app is not signed, so the
+            first time, right-click it and choose Open.
+            Windows: run the -setup.exe (or the .msi).
+          releaseDraft: true
+          prerelease: false

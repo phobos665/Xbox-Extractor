@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 authors = ["Daniel Joyce"]
-repository = "https://github.com/phobos665/xbox-iso-batcher"
+repository = "https://github.com/phobos665/Xbox-Extractor"
 
 [workspace.dependencies]
 xbe = { path = "crates/xbe" }

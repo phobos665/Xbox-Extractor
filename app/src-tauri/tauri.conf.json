@@ -39,7 +39,10 @@
     "copyright": "Copyright (C) 2026 Daniel Joyce",
     "externalBin": [
       "binaries/extract-xiso"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
   },
   "mainBinaryName": "xbox-iso-batcher"
 }
