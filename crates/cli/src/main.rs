@@ -45,7 +45,7 @@ impl Conn {
 enum Cmd {
     /// Look for FTP servers on the local network.
     Discover {
-        /// Any address in the /24 to search; defaults to this machine's.
+        /// Any address in the /24 to search; defaults to each of this machine's networks.
         #[arg(long)]
         near: Option<std::net::Ipv4Addr>,
         #[arg(long, default_value_t = 21)]
@@ -136,12 +136,15 @@ async fn main() {
 async fn run(cli: Cli) -> xib_core::Result<()> {
     match cli.cmd {
         Cmd::Discover { near, port } => {
-            eprintln!("searching the local /24 for FTP servers on port {port}...");
-            let found = discover::discover(near, port, |_| {}).await;
-            if found.is_empty() {
-                println!("nothing answered");
+            eprintln!("searching for FTP servers on port {port}...");
+            let d = discover::discover(near, port, |_| {}).await;
+            for n in &d.networks {
+                eprintln!("searched the /24 of {} {}", n.address, n.adapter);
             }
-            for f in found {
+            if d.found.is_empty() {
+                println!("nothing answered on port {port}");
+            }
+            for f in d.found {
                 let tag = if f.looks_like_xbox { "xbox " } else { "     " };
                 println!("{tag} {:<15} {}", f.host, f.banner);
             }

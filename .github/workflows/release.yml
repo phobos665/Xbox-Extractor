@@ -12,8 +12,37 @@ on:
 permissions:
   contents: write
 
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GH_REPO: ${{ github.repository }}
+
 jobs:
+  # Made once, before the builds, so the two build jobs upload to the same draft.
+  draft:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: echo "tag=v$(jq -r .version app/src-tauri/tauri.conf.json)" >> "$GITHUB_OUTPUT"
+      - env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release view "$TAG" > /dev/null 2>&1 && exit 0
+          cat > notes.md <<'EOF'
+          macOS: open the .dmg and drag the app to Applications. The app is not signed, so the
+          first time, right-click it and choose Open.
+
+          Windows: unzip the -portable.zip anywhere and run xbox-iso-batcher.exe. Keep
+          extract-xiso.exe next to it; the Extract ISOs tab runs it. Nothing is installed. The app
+          is not signed, so SmartScreen may ask first: More info, then Run anyway.
+          EOF
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" \
+            --title "Xbox ISO Batcher $TAG" --notes-file notes.md
+
   release:
+    needs: draft
     strategy:
       fail-fast: false
       matrix:
@@ -21,12 +50,16 @@ jobs:
           - os: macos-latest
             target: universal-apple-darwin
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            bundle: --bundles dmg
+          # No installer: the plain .exe and its sidecar go out as a zip.
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             rust-targets: x86_64-pc-windows-msvc
+            bundle: --no-bundle
     runs-on: ${{ matrix.os }}
     env:
       TAURI_ENV_TARGET_TRIPLE: ${{ matrix.target }}
+      TAG: ${{ needs.draft.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -43,18 +76,19 @@ jobs:
           cache-dependency-path: app/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
         working-directory: app
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: app
-          tauriScript: pnpm tauri
-          args: --target ${{ matrix.target }}
-          tagName: v__VERSION__
-          releaseName: Xbox ISO Batcher v__VERSION__
-          releaseBody: |
-            macOS: open the .dmg and drag the app to Applications. The app is not signed, so the
-            first time, right-click it and choose Open.
-            Windows: run the -setup.exe (or the .msi).
-          releaseDraft: true
-          prerelease: false
+      - run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle }}
+        working-directory: app
+      - if: runner.os == 'macOS'
+        run: gh release upload "$TAG" target/${{ matrix.target }}/release/bundle/dmg/*.dmg --clobber
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Get-Content app/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $dir = "Xbox ISO Batcher"
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/xbox-iso-batcher.exe $dir/
+          # Tauri runs the sidecar from next to the app, under its name without the triple.
+          Copy-Item app/src-tauri/binaries/extract-xiso-${{ matrix.target }}.exe $dir/extract-xiso.exe
+          $zip = "Xbox.ISO.Batcher_${version}_x64-portable.zip"
+          Compress-Archive -Path $dir -DestinationPath $zip
+          gh release upload $env:TAG $zip --clobber

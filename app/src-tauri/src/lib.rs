@@ -91,7 +91,7 @@ struct FolderSize {
 }
 
 #[tauri::command]
-async fn discover_xboxes(app: AppHandle) -> CmdResult<Vec<discover::Found>> {
+async fn discover_xboxes(app: AppHandle) -> CmdResult<discover::Discovery> {
     let a = app.clone();
     Ok(discover::discover(None, 21, move |f| {
         let _ = a.emit("discover://found", f);

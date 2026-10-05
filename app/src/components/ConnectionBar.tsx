@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, onDiscovered, type ConnectionInfo, type Found } from "../api";
+import { api, onDiscovered, type ConnectionInfo, type Found, type Network } from "../api";
 
 export type ConnStatus =
   | { kind: "idle" }
@@ -19,6 +19,7 @@ interface Props {
 
 export function ConnectionBar({ info, recentHosts, status, onChange, onConnect, onDisconnect, onOpenSettings }: Props) {
   const [found, setFound] = useState<Found[]>([]);
+  const [networks, setNetworks] = useState<Network[]>([]);
   const [searching, setSearching] = useState(false);
   const [showFound, setShowFound] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
@@ -41,12 +42,14 @@ export function ConnectionBar({ info, recentHosts, status, onChange, onConnect, 
     setSearching(true);
     setShowFound(true);
     setFound([]);
+    setNetworks([]);
     const un = await onDiscovered((f) =>
       setFound((prev) => (prev.some((p) => p.host === f.host) ? prev : [...prev, f])),
     );
     try {
-      const all = await api.discover();
-      setFound(all);
+      const d = await api.discover();
+      setFound(d.found);
+      setNetworks(d.networks);
     } finally {
       un();
       setSearching(false);
@@ -92,7 +95,7 @@ export function ConnectionBar({ info, recentHosts, status, onChange, onConnect, 
           </button>
           {showFound && (
             <div className="popover">
-              <div className="popover-title">FTP servers on this network</div>
+              <div className="popover-title">FTP servers on these networks</div>
               {found.length === 0 && (
                 <div className="muted small">{searching ? "Searching…" : "Nothing answered on port 21."}</div>
               )}
@@ -111,6 +114,13 @@ export function ConnectionBar({ info, recentHosts, status, onChange, onConnect, 
                   <span className="muted small ellipsis">{f.banner.replace(/^220[- ]?/, "")}</span>
                 </button>
               ))}
+              {!searching && (
+                <div className="muted small">
+                  {networks.length === 0
+                    ? "No network found to search."
+                    : `Searched ${networks.map((n) => `${n.address}${n.adapter ? ` (${n.adapter})` : ""}`).join(", ")} /24.`}
+                </div>
+              )}
             </div>
           )}
         </div>

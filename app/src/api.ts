@@ -54,6 +54,16 @@ export interface Found {
   looksLikeXbox: boolean;
 }
 
+export interface Network {
+  adapter: string;
+  address: string;
+}
+
+export interface Discovery {
+  networks: Network[];
+  found: Found[];
+}
+
 export interface Connected {
   server: string | null;
   drives: string[];
@@ -108,7 +118,7 @@ export interface QueuedJob {
 export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
-  discover: () => invoke<Found[]>("discover_xboxes"),
+  discover: () => invoke<Discovery>("discover_xboxes"),
   connect: (info: ConnectionInfo) => invoke<Connected>("connect", { info }),
   disconnect: () => invoke<void>("disconnect"),
   scan: (roots: string[], depth: number, full = false) =>

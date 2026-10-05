@@ -25,9 +25,12 @@ jobs:
           - os: macos-latest
             target: universal-apple-darwin
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            bundle: --bundles dmg
+          # No installer: the plain .exe and its sidecar, as release.yml ships them.
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             rust-targets: x86_64-pc-windows-msvc
+            bundle: --no-bundle
     runs-on: ${{ matrix.os }}
     env:
       # Read by app/scripts/build-sidecar.mjs so extract-xiso is built for the same target.
@@ -48,13 +51,19 @@ jobs:
           cache-dependency-path: app/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
         working-directory: app
-      - run: pnpm tauri build --target ${{ matrix.target }}
+      - run: pnpm tauri build --target ${{ matrix.target }} ${{ matrix.bundle }}
         working-directory: app
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory portable | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/xbox-iso-batcher.exe portable/
+          Copy-Item app/src-tauri/binaries/extract-xiso-${{ matrix.target }}.exe portable/extract-xiso.exe
+      # upload-artifact zips what it is given, so the Windows artifact is already the portable zip.
       - uses: actions/upload-artifact@v4
         with:
           name: xbox-iso-batcher-${{ matrix.target }}
           if-no-files-found: error
           path: |
             target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            target/${{ matrix.target }}/release/bundle/msi/*.msi
-            target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            portable/

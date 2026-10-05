@@ -49,12 +49,15 @@ macOS, Visual Studio Build Tools on Windows).
 cd app
 pnpm install
 pnpm tauri dev      # run
-pnpm tauri build    # .app/.dmg on macOS, .msi/.exe on Windows
+pnpm tauri build    # .app/.dmg on macOS, .msi/.exe installers on Windows
 ```
 
 `pnpm tauri dev` and `pnpm tauri build` build extract-xiso first (`app/scripts/build-sidecar.mjs`).
-CI builds macOS (Apple Silicon and Intel) and Windows: `.github/workflows/build.yml`. Builds are
-not signed, so macOS will ask you to allow the app the first time (right-click, Open).
+CI builds macOS (Apple Silicon and Intel) and Windows: `.github/workflows/build.yml`. CI and
+releases ship Windows as a portable zip, not an installer: `xbox-iso-batcher.exe` with
+`extract-xiso.exe` next to it (`pnpm tauri build --no-bundle` builds the first). It needs the
+WebView2 runtime, which Windows 10 and 11 already have. Builds are not signed, so macOS will ask
+you to allow the app the first time (right-click, Open).
 
 ## Command line
 
