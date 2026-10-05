@@ -1,0 +1,23 @@
+[package]
+name = "xib-core"
+description = "Finds titles on an original Xbox over FTP and streams them into XISO images"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+xbe.workspace = true
+xdvdfs.workspace = true
+suppaftp.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+libunftp = "0.23.1"
+tempfile = "3.27.0"
+unftp-sbe-fs = "0.4.0"
+xbe = { path = "../xbe" }

@@ -1,0 +1,19 @@
+[package]
+name = "xib-cli"
+description = "Command-line front end for xbox-iso-batcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "xib"
+path = "src/main.rs"
+
+[dependencies]
+xib-core.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+log.workspace = true
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
