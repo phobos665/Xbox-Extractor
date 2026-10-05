@@ -101,3 +101,11 @@ Third-party code:
 - [extract-xiso](https://github.com/XboxDev/extract-xiso) is shipped as a separate program under
   its own BSD-style licence (`third_party/extract-xiso/LICENSE.TXT`). This product includes
   software developed by in <in@fishtank.com>.
+
+
+## Acknowledgements
+
+- [Qwix](https://avalaunch.net/qwix/) - Absolute wizards. I've used their program for many years and truly, thank you for what you've done over the years.
+- [extract-xiso](https://github.com/XboxDev/extract-xiso) - Amazing tool and the basis for this wrapper-tool.
+- [xdvdfs](https://github.com/antangelo/xdvdfs) - Similar to extract-xiso, a major part of this tooling.
+
