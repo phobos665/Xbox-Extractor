@@ -6,6 +6,7 @@ pub mod ftpfs;
 pub mod iso;
 pub mod listparse;
 pub mod scan;
+pub mod transfer;
 pub mod writer;
 
 pub use error::{Error, Result};

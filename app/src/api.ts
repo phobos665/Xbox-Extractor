@@ -109,6 +109,18 @@ export interface QueuedExtract {
   outDir: string;
 }
 
+/** xib_core::RemoteEntry: one line of a folder listing on the Xbox. */
+export interface RemoteEntry {
+  name: string;
+  isDir: boolean;
+  size: number;
+}
+
+/** A Files tab transfer. `size` is the listed size of a downloaded file (0 for a folder). */
+export type TransferRequest =
+  | { kind: "upload"; local: string; remoteDir: string }
+  | { kind: "download"; remote: string; isDir: boolean; size: number; localDir: string };
+
 export interface QueuedJob {
   id: number;
   path: string;
@@ -128,7 +140,12 @@ export const api = {
   enqueue: (requests: { path: string; isoName: string }[], outputDir: string, mode: OutputMode, overwrite: boolean) =>
     invoke<QueuedJob[]>("enqueue_jobs", { requests, outputDir, mode, overwrite }),
   cancelJob: (id: number) => invoke<void>("cancel_job", { id }),
-  cancelAll: () => invoke<void>("cancel_all_jobs"),
+  browse: (path: string) => invoke<RemoteEntry[]>("browse", { path }),
+  makeDir: (path: string) => invoke<void>("make_dir", { path }),
+  rename: (path: string, newName: string) => invoke<string>("rename_entry", { path, newName }),
+  remove: (entries: { path: string; isDir: boolean }[]) => invoke<void>("delete_entries", { entries }),
+  enqueueTransfers: (requests: TransferRequest[], overwrite: boolean) =>
+    invoke<QueuedJob[]>("enqueue_transfers", { requests, overwrite }),
   enqueueExtracts: (isos: string[], destDir: string, skipSystemUpdate: boolean, overwrite: boolean) =>
     invoke<QueuedExtract[]>("enqueue_extracts", { isos, destDir, skipSystemUpdate, overwrite }),
   cancelExtract: (id: number) => invoke<void>("cancel_extract", { id }),
@@ -149,6 +166,18 @@ export function onJobUpdate(f: (u: JobUpdate) => void): Promise<UnlistenFn> {
 
 export function onDiscovered(f: (x: Found) => void): Promise<UnlistenFn> {
   return listen<Found>("discover://found", (e) => f(e.payload));
+}
+
+/** Joins remote path components with `/`, like xib_core::ftp::join. */
+export function joinRemote(base: string, name: string): string {
+  const b = base.replace(/\/+$/, "");
+  return `${b}/${name.replace(/^\/+/, "")}`;
+}
+
+/** The remote folder holding `path`. */
+export function parentRemote(path: string): string {
+  const i = path.replace(/\/+$/, "").lastIndexOf("/");
+  return i <= 0 ? "/" : path.slice(0, i);
 }
 
 export function formatBytes(n: number | undefined | null): string {

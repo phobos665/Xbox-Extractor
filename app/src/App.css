@@ -778,3 +778,64 @@ select:focus {
 .credits {
   padding: 0 16px 16px;
 }
+
+/* ---------- files tab ---------- */
+
+.files.dragging {
+  outline: 2px dashed var(--green);
+  outline-offset: -8px;
+}
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.crumbs button {
+  border: none;
+  background: transparent;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.crumbs button:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+.crumbs > span:last-child button {
+  color: var(--green);
+}
+.files-list td:first-child {
+  width: 28px;
+}
+.ficon-cell {
+  width: 26px;
+  color: var(--muted);
+  line-height: 0;
+}
+.ficon-folder,
+.ficon-drive {
+  color: var(--green);
+}
+.files-list .row-title {
+  font-weight: 500;
+}
+.rename {
+  width: 100%;
+  max-width: 420px;
+  padding: 3px 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--green);
+  border-radius: 4px;
+  outline: none;
+}
+.banner {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--red-tint);
+  color: var(--red);
+  cursor: pointer;
+}
