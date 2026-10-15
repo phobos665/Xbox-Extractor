@@ -1,17 +1,28 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, formatBytes, formatDuration, type IsoProgress, type JobState, type OutputMode } from "../api";
 
+/** What a job does: build or copy a title, or move something for the Files tab. */
+export type JobKind = OutputMode | "upload" | "download";
+
 export interface JobView {
   id: number;
   path: string;
   name: string;
-  mode: OutputMode;
+  mode: JobKind;
+  /** A local path, or for an upload the path it lands at on the Xbox. */
   outPath: string;
   state: JobState;
   progress: IsoProgress | null;
   rate: number | null;
   message: string | null;
 }
+
+const KIND_LABEL: Record<JobKind, string> = {
+  iso: "ISO",
+  files: "Files",
+  upload: "Upload",
+  download: "Download",
+};
 
 const STATE_LABEL: Record<JobState, string> = {
   queued: "Queued",
@@ -55,20 +66,23 @@ function fraction(j: JobView): number {
 
 interface Props {
   jobs: JobView[];
+  title?: string;
+  emptyText: string;
   onClearFinished: () => void;
 }
 
-export function QueuePanel({ jobs, onClearFinished }: Props) {
-  const active = jobs.filter((j) => j.state === "queued" || j.state === "running").length;
+export function QueuePanel({ jobs, title = "Queue", emptyText, onClearFinished }: Props) {
+  const activeJobs = jobs.filter((j) => j.state === "queued" || j.state === "running");
+  const active = activeJobs.length;
   const finished = jobs.length - active;
 
   return (
     <aside className="queue">
       <div className="queue-head">
-        <h2>Queue</h2>
+        <h2>{title}</h2>
         <div className="spacer" />
         {active > 0 && (
-          <button className="btn btn-small" onClick={() => api.cancelAll()}>
+          <button className="btn btn-small" onClick={() => activeJobs.forEach((j) => api.cancelJob(j.id))}>
             Cancel all
           </button>
         )}
@@ -79,7 +93,7 @@ export function QueuePanel({ jobs, onClearFinished }: Props) {
         )}
       </div>
       {jobs.length === 0 && (
-        <div className="empty small muted">Select titles and press Create ISOs (or Copy games, in Files mode). They run one at a time.</div>
+        <div className="empty small muted">{emptyText}</div>
       )}
       <ul>
         {jobs.map((j) => (
@@ -88,7 +102,7 @@ export function QueuePanel({ jobs, onClearFinished }: Props) {
               <span className="job-name" title={j.outPath}>
                 {j.name}
               </span>
-              <span className="tag">{j.mode === "iso" ? "ISO" : "Files"}</span>
+              <span className="tag">{KIND_LABEL[j.mode]}</span>
               <span className={`tag state-${j.state}`}>{STATE_LABEL[j.state]}</span>
             </div>
             {(j.state === "running" || j.state === "done") && (
@@ -106,7 +120,7 @@ export function QueuePanel({ jobs, onClearFinished }: Props) {
                   Cancel
                 </button>
               )}
-              {(j.state === "done" || j.state === "skipped") && (
+              {(j.state === "done" || j.state === "skipped") && j.mode !== "upload" && (
                 <button className="btn btn-small btn-ghost" onClick={() => revealItemInDir(j.outPath)}>
                   Show
                 </button>

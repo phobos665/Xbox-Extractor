@@ -312,3 +312,89 @@ async fn cancelled_copy_leaves_nothing_behind() {
     assert!(!iso::part_path(&out).exists());
     assert!(!ftp.list_dir("/F").await.unwrap().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn upload_download_rename_and_delete() {
+    use xib_core::transfer;
+
+    let xbox = tempfile::tempdir().unwrap();
+    make_tree(xbox.path());
+    let info = start_server(xbox.path().to_path_buf(), 50700..=50740).await;
+    let mut ftp = XboxFtp::connect(&info).await.unwrap();
+    let none: ProgressFn = Arc::new(|_| {});
+
+    // A local folder with a subfolder, an empty file, and junk the Xbox should not get.
+    let pc = tempfile::tempdir().unwrap();
+    let src = pc.path().join("Homebrew");
+    std::fs::create_dir_all(src.join("media")).unwrap();
+    std::fs::write(src.join("default.xbe"), pattern(2 * 1024 * 1024 + 7, 5)).unwrap();
+    std::fs::write(src.join("media/empty.bin"), b"").unwrap();
+    std::fs::write(src.join(".DS_Store"), b"junk").unwrap();
+
+    let sent = transfer::upload(&mut ftp, &src, "/E/Apps", none.clone(), Cancel::new()).await;
+    assert!(sent.is_err(), "the parent folder does not exist yet");
+    ftp.mkdir("/E/Apps").await.unwrap();
+    let sent = transfer::upload(&mut ftp, &src, "/E/Apps", none.clone(), Cancel::new()).await.unwrap();
+    assert_eq!(sent, 2 * 1024 * 1024 + 7);
+    let on_xbox = xbox.path().join("E/Apps/Homebrew");
+    assert!(!on_xbox.join(".DS_Store").exists());
+    assert_eq!(std::fs::read(on_xbox.join("default.xbe")).unwrap(), std::fs::read(src.join("default.xbe")).unwrap());
+    assert!(on_xbox.join("media/empty.bin").exists());
+
+    // Uploading again merges into the folder that is now there.
+    transfer::upload(&mut ftp, &src, "/E/Apps", none.clone(), Cancel::new()).await.unwrap();
+
+    // A single file, then back down again.
+    let one = pc.path().join("notes.txt");
+    std::fs::write(&one, b"from the pc").unwrap();
+    transfer::upload(&mut ftp, &one, "/E/Apps", none.clone(), Cancel::new()).await.unwrap();
+    let back = pc.path().join("back.txt");
+    transfer::download(&mut ftp, "/E/Apps/notes.txt", false, 11, &back, none.clone(), Cancel::new()).await.unwrap();
+    assert_eq!(std::fs::read(&back).unwrap(), b"from the pc");
+    let back_dir = pc.path().join("Back");
+    transfer::download(&mut ftp, "/E/Apps/Homebrew", true, 0, &back_dir, none.clone(), Cancel::new()).await.unwrap();
+    assert_eq!(std::fs::read(back_dir.join("default.xbe")).unwrap(), std::fs::read(src.join("default.xbe")).unwrap());
+
+    ftp.rename("/E/Apps/notes.txt", "readme.txt").await.unwrap();
+    let names: Vec<String> = ftp.list_dir("/E/Apps").await.unwrap().into_iter().map(|e| e.name).collect();
+    assert!(names.contains(&"readme.txt".to_string()) && !names.contains(&"notes.txt".to_string()), "{names:?}");
+
+    transfer::remove(&mut ftp, "/E/Apps/Homebrew", true).await.unwrap();
+    transfer::remove(&mut ftp, "/E/Apps/readme.txt", false).await.unwrap();
+    assert!(ftp.list_dir("/E/Apps").await.unwrap().is_empty());
+    assert!(transfer::remove(&mut ftp, "/E", true).await.is_err());
+    assert!(xbox.path().join("E/UDATA").exists());
+
+    // A name FATX cannot hold is refused before anything is sent.
+    let long = pc.path().join("a".repeat(43));
+    std::fs::write(&long, b"x").unwrap();
+    assert!(transfer::upload(&mut ftp, &long, "/E/Apps", none.clone(), Cancel::new()).await.is_err());
+    assert!(ftp.list_dir("/E/Apps").await.unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_upload_removes_the_partial_file() {
+    use xib_core::transfer;
+
+    let xbox = tempfile::tempdir().unwrap();
+    make_tree(xbox.path());
+    let info = start_server(xbox.path().to_path_buf(), 50800..=50840).await;
+    let mut ftp = XboxFtp::connect(&info).await.unwrap();
+
+    let pc = tempfile::tempdir().unwrap();
+    let big = pc.path().join("big.bin");
+    std::fs::write(&big, pattern(4 * 1024 * 1024, 1)).unwrap();
+    let cancel = Cancel::new();
+    let c = cancel.clone();
+    let progress: ProgressFn = Arc::new(move |p| {
+        if let IsoProgress::Copying { done, .. } = p {
+            if done > 1024 * 1024 {
+                c.cancel();
+            }
+        }
+    });
+    let err = transfer::upload(&mut ftp, &big, "/E", progress, cancel).await.unwrap_err();
+    assert!(matches!(err, xib_core::Error::Cancelled), "{err}");
+    assert!(!xbox.path().join("E/big.bin").exists());
+    assert!(!ftp.list_dir("/E").await.unwrap().is_empty());
+}

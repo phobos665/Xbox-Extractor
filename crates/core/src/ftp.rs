@@ -42,6 +42,7 @@ impl ConnectionInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteEntry {
     pub name: String,
     pub is_dir: bool,
@@ -181,6 +182,70 @@ impl XboxFtp {
             drop(stream);
         }
         self.reconnect().await
+    }
+
+    /// Opens `path` for writing (`STOR`), replacing any file already there. The caller must
+    /// end the upload with [`XboxFtp::finish_write`], or drop the stream and reconnect.
+    pub async fn open_write(&mut self, path: &str) -> Result<TransferStream> {
+        let (dir, name) = split(path);
+        self.cwd(dir).await?;
+        let t = self.timeout;
+        match tokio::time::timeout(t, self.stream.put_with_stream(name)).await {
+            Ok(r) => r.map_err(|e| Error::Ftp(format!("cannot write {path}: {e}"))),
+            Err(_) => Err(Error::Timeout(format!("STOR {path}"))),
+        }
+    }
+
+    /// Closes an upload and waits for the server to confirm it stored the file.
+    pub async fn finish_write(&mut self, stream: TransferStream, path: &str) -> Result<()> {
+        match tokio::time::timeout(self.timeout, stream.finish()).await {
+            Ok(r) => r.map_err(|e| Error::Ftp(format!("the Xbox did not store {path}: {e}"))),
+            Err(_) => Err(Error::Timeout(format!("finishing {path}"))),
+        }
+    }
+
+    /// Creates the folder `path`. Its parent must exist.
+    pub async fn mkdir(&mut self, path: &str) -> Result<()> {
+        let (dir, name) = split(path);
+        self.cwd(dir).await?;
+        let t = self.timeout;
+        match tokio::time::timeout(t, self.stream.mkdir(name)).await {
+            Ok(r) => r.map_err(|e| Error::Ftp(format!("cannot create {path}: {e}"))),
+            Err(_) => Err(Error::Timeout(format!("MKD {path}"))),
+        }
+    }
+
+    /// Deletes the file at `path` (`DELE`).
+    pub async fn remove_file(&mut self, path: &str) -> Result<()> {
+        let (dir, name) = split(path);
+        self.cwd(dir).await?;
+        let t = self.timeout;
+        match tokio::time::timeout(t, self.stream.rm(name)).await {
+            Ok(r) => r.map_err(|e| Error::Ftp(format!("cannot delete {path}: {e}"))),
+            Err(_) => Err(Error::Timeout(format!("DELE {path}"))),
+        }
+    }
+
+    /// Deletes the empty folder at `path` (`RMD`).
+    pub async fn remove_dir(&mut self, path: &str) -> Result<()> {
+        let (dir, name) = split(path);
+        self.cwd(dir).await?;
+        let t = self.timeout;
+        match tokio::time::timeout(t, self.stream.rmdir(name)).await {
+            Ok(r) => r.map_err(|e| Error::Ftp(format!("cannot delete {path}: {e}"))),
+            Err(_) => Err(Error::Timeout(format!("RMD {path}"))),
+        }
+    }
+
+    /// Renames the file or folder at `path` to `new_name`, in the same folder.
+    pub async fn rename(&mut self, path: &str, new_name: &str) -> Result<()> {
+        let (dir, name) = split(path);
+        self.cwd(dir).await?;
+        let t = self.timeout;
+        match tokio::time::timeout(t, self.stream.rename(name, new_name)).await {
+            Ok(r) => r.map_err(|e| Error::Ftp(format!("cannot rename {path}: {e}"))),
+            Err(_) => Err(Error::Timeout(format!("rename {path}"))),
+        }
     }
 
     /// Reads from `offset` until `target` says enough bytes have arrived, at most `cap` bytes,

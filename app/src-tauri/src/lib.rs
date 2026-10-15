@@ -1,7 +1,8 @@
 //! Tauri commands behind the GUI. The work itself is in `xib-core`; this keeps one browsing
-//! session to the Xbox, a cache of what the last scan found, and the ISO queue.
+//! session to the Xbox, a cache of what the last scan found, and the transfer queue.
 
 mod extract;
+mod files;
 mod jobs;
 mod settings;
 
@@ -250,11 +251,6 @@ fn cancel_job(jobs: State<'_, Arc<Jobs>>, id: u64) {
     jobs.cancel(id);
 }
 
-#[tauri::command]
-fn cancel_all_jobs(jobs: State<'_, Arc<Jobs>>) {
-    jobs.cancel_all();
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,suppaftp=error")).try_init();
@@ -276,7 +272,11 @@ pub fn run() {
             save_settings,
             enqueue_jobs,
             cancel_job,
-            cancel_all_jobs,
+            files::browse,
+            files::make_dir,
+            files::rename_entry,
+            files::delete_entries,
+            files::enqueue_transfers,
             extract::enqueue_extracts,
             extract::cancel_extract,
             extract::sidecar_version,

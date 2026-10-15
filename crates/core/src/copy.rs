@@ -90,43 +90,91 @@ async fn copy_into(
             return Err(Error::Cancelled);
         }
         progress(IsoProgress::Copying { file: f.remote.clone(), done, total });
-        let mut out = BufWriter::with_capacity(CHUNK, File::create(part.join(&f.rel))?);
-        if f.size == 0 {
-            continue;
-        }
-
-        let mut stream = ftp.open_read(&f.remote, 0).await?;
-        let timeout = ftp.timeout();
-        let mut copied = 0u64;
-        let result: Result<()> = async {
-            loop {
-                if cancel.is_cancelled() {
-                    return Err(Error::Cancelled);
-                }
-                let n = match tokio::time::timeout(timeout, stream.read(&mut buf)).await {
-                    Ok(r) => r?,
-                    Err(_) => return Err(Error::Timeout(format!("reading {}", f.remote))),
-                };
-                if n == 0 {
-                    return Ok(());
-                }
-                out.write_all(&buf[..n])?;
-                copied += n as u64;
-                done += n as u64;
-                progress(IsoProgress::Copying { file: f.remote.clone(), done, total });
-            }
-        }
-        .await;
-        let end = ftp.end_transfer(stream, result.is_ok()).await;
-        result?;
-        end?;
-        out.flush()?;
-        if copied != f.size {
-            return Err(Error::ShortRead { path: f.remote.clone(), expected: f.size, got: copied });
-        }
+        let base = done;
+        fetch_file(ftp, &f.remote, f.size, &part.join(&f.rel), &mut buf, cancel, |n| {
+            progress(IsoProgress::Copying { file: f.remote.clone(), done: base + n, total })
+        })
+        .await?;
+        done += f.size;
     }
     progress(IsoProgress::Finishing);
     Ok(done)
+}
+
+/// Copies the file at `remote` (`size` bytes, as listed) to the local file `out`, through
+/// `<out>.part` like [`copy_folder`]. An existing `out` is replaced. Returns the bytes copied.
+pub async fn copy_file(
+    ftp: &mut XboxFtp,
+    remote: &str,
+    size: u64,
+    out: &Path,
+    progress: ProgressFn,
+    cancel: Cancel,
+) -> Result<u64> {
+    let part = part_path(out);
+    progress(IsoProgress::Copying { file: remote.to_string(), done: 0, total: size });
+    let mut buf = vec![0u8; CHUNK];
+    let result = fetch_file(ftp, remote, size, &part, &mut buf, &cancel, |n| {
+        progress(IsoProgress::Copying { file: remote.to_string(), done: n, total: size })
+    })
+    .await;
+    match result {
+        Ok(()) => {
+            std::fs::rename(&part, out)?;
+            progress(IsoProgress::Done { bytes: size });
+            Ok(size)
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&part);
+            Err(e)
+        }
+    }
+}
+
+/// Downloads one file to `dest`, calling `on_bytes` with the bytes received so far.
+async fn fetch_file(
+    ftp: &mut XboxFtp,
+    remote: &str,
+    size: u64,
+    dest: &Path,
+    buf: &mut [u8],
+    cancel: &Cancel,
+    mut on_bytes: impl FnMut(u64),
+) -> Result<()> {
+    let mut out = BufWriter::with_capacity(CHUNK, File::create(dest)?);
+    if size == 0 {
+        return Ok(());
+    }
+
+    let mut stream = ftp.open_read(remote, 0).await?;
+    let timeout = ftp.timeout();
+    let mut copied = 0u64;
+    let result: Result<()> = async {
+        loop {
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let n = match tokio::time::timeout(timeout, stream.read(buf)).await {
+                Ok(r) => r?,
+                Err(_) => return Err(Error::Timeout(format!("reading {remote}"))),
+            };
+            if n == 0 {
+                return Ok(());
+            }
+            out.write_all(&buf[..n])?;
+            copied += n as u64;
+            on_bytes(copied);
+        }
+    }
+    .await;
+    let end = ftp.end_transfer(stream, result.is_ok()).await;
+    result?;
+    end?;
+    out.flush()?;
+    if copied != size {
+        return Err(Error::ShortRead { path: remote.to_string(), expected: size, got: copied });
+    }
+    Ok(())
 }
 
 /// A folder name for a title copied as files: the ISO name without `.iso`.

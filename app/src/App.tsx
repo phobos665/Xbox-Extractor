@@ -6,10 +6,11 @@ import { Library, type ViewMode } from "./components/Library";
 import { QueuePanel, type JobView } from "./components/QueuePanel";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ExtractTab } from "./components/ExtractTab";
+import { FilesTab } from "./components/FilesTab";
 import "./App.css";
 
 type SortKey = "name" | "size" | "path";
-type Tab = "xbox" | "extract";
+type Tab = "xbox" | "files" | "extract";
 
 export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -248,12 +249,21 @@ export default function App() {
         <button className={tab === "xbox" ? "on" : ""} onClick={() => setTab("xbox")}>
           Xbox to ISO
         </button>
+        <button className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>
+          Files
+        </button>
         <button className={tab === "extract" ? "on" : ""} onClick={() => setTab("extract")}>
           Extract ISOs
         </button>
       </nav>
 
       {tab === "extract" && settings && <ExtractTab settings={settings} onSettings={persist} />}
+
+      {settings && (
+        <div className="body" hidden={tab !== "files"}>
+          <FilesTab connected={status.kind === "connected"} active={tab === "files"} settings={settings} />
+        </div>
+      )}
 
       <div className="body" hidden={tab !== "xbox"}>
         <main className="library">
@@ -384,6 +394,7 @@ export default function App() {
 
         <QueuePanel
           jobs={jobs}
+          emptyText="Select titles and press Create ISOs (or Copy games, in Files mode). They run one at a time."
           onClearFinished={() => setJobs((prev) => prev.filter((j) => j.state === "queued" || j.state === "running"))}
         />
       </div>
