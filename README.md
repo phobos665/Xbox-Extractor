@@ -2,7 +2,7 @@
 
 List the games on an original Xbox over FTP and turn any of them into ISOs on your computer, in
 bulk. Also extracts ISOs back into folders. An open-source take on the ISO side of
-[Qwix](https://avalaunch.net/qwix/), for macOS and Windows.
+[Qwix](https://avalaunch.net/qwix/), for macOS, Windows and Linux.
 
 - **Find the Xbox.** Type its IP address, or press *Find Xbox* to search the local network.
   Most consoles log in with `xbox` / `xbox` on port 21.
@@ -43,21 +43,26 @@ third_party/   extract-xiso, vendored and built as a sidecar program
 ## Building
 
 You need Rust (stable), Node 22 with pnpm, CMake and a C compiler (Xcode command line tools on
-macOS, Visual Studio Build Tools on Windows).
+macOS, Visual Studio Build Tools on Windows). On Linux, also Tauri's
+[prerequisites](https://v2.tauri.app/start/prerequisites/#linux): WebKitGTK 4.1 and friends,
+which on Debian and Ubuntu are `libwebkit2gtk-4.1-dev libxdo-dev libssl-dev
+libayatana-appindicator3-dev librsvg2-dev`.
 
 ```sh
 cd app
 pnpm install
 pnpm tauri dev      # run
-pnpm tauri build    # .app/.dmg on macOS, .msi/.exe installers on Windows
+pnpm tauri build    # .app/.dmg on macOS, .msi/.exe installers on Windows, .AppImage/.deb/.rpm on Linux
 ```
 
 `pnpm tauri dev` and `pnpm tauri build` build extract-xiso first (`app/scripts/build-sidecar.mjs`).
-CI builds macOS (Apple Silicon and Intel) and Windows: `.github/workflows/build.yml`. CI and
-releases ship Windows as a portable zip, not an installer: `xbox-iso-batcher.exe` with
-`extract-xiso.exe` next to it (`pnpm tauri build --no-bundle` builds the first). It needs the
-WebView2 runtime, which Windows 10 and 11 already have. Builds are not signed, so macOS will ask
-you to allow the app the first time (right-click, Open).
+CI builds macOS (Apple Silicon and Intel), Windows and Linux (x86-64, as an AppImage and a
+`.deb`, built on Ubuntu 22.04 so the AppImage runs on any distribution with glibc 2.35 or
+newer): `.github/workflows/build.yml`. CI and releases ship Windows as a portable zip, not an
+installer: `xbox-iso-batcher.exe` with `extract-xiso.exe` next to it (`pnpm tauri build
+--no-bundle` builds the first). It needs the WebView2 runtime, which Windows 10 and 11 already
+have. Builds are not signed, so macOS will ask you to allow the app the first time (right-click,
+Open).
 
 ## Command line
 

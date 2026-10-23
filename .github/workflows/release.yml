@@ -1,8 +1,8 @@
 name: release
 
 # Push a tag named after the version in app/src-tauri/tauri.conf.json (e.g. v0.1.0), or run by
-# hand. Builds the macOS and Windows apps and attaches them to a draft release, to review and
-# publish on GitHub.
+# hand. Builds the macOS, Windows and Linux apps and attaches them to a draft release, to review
+# and publish on GitHub.
 
 on:
   push:
@@ -17,7 +17,7 @@ env:
   GH_REPO: ${{ github.repository }}
 
 jobs:
-  # Made once, before the builds, so the two build jobs upload to the same draft.
+  # Made once, before the builds, so the build jobs upload to the same draft.
   draft:
     runs-on: ubuntu-latest
     outputs:
@@ -37,6 +37,9 @@ jobs:
           Windows: unzip the -portable.zip anywhere and run xbox-iso-batcher.exe. Keep
           extract-xiso.exe next to it; the Extract ISOs tab runs it. Nothing is installed. The app
           is not signed, so SmartScreen may ask first: More info, then Run anyway.
+
+          Linux: the .AppImage runs on its own (chmod +x it first, or tick "Allow executing"
+          in its properties); the .deb installs it on Debian and Ubuntu.
           EOF
           gh release create "$TAG" --draft --target "$GITHUB_SHA" \
             --title "Xbox ISO Batcher $TAG" --notes-file notes.md
@@ -56,6 +59,12 @@ jobs:
             target: x86_64-pc-windows-msvc
             rust-targets: x86_64-pc-windows-msvc
             bundle: --no-bundle
+          # 22.04 rather than latest: an AppImage runs only on glibc as new as the one it was
+          # built against, and the oldest runner reaches the most distributions.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            rust-targets: x86_64-unknown-linux-gnu
+            bundle: --bundles appimage,deb
     runs-on: ${{ matrix.os }}
     env:
       TAURI_ENV_TARGET_TRIPLE: ${{ matrix.target }}
@@ -66,6 +75,12 @@ jobs:
         with:
           targets: ${{ matrix.rust-targets }}
       - uses: Swatinem/rust-cache@v2
+      # Tauri's Linux prerequisites (WebKitGTK and friends); `file` is for the AppImage bundler.
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev file
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -80,6 +95,11 @@ jobs:
         working-directory: app
       - if: runner.os == 'macOS'
         run: gh release upload "$TAG" target/${{ matrix.target }}/release/bundle/dmg/*.dmg --clobber
+      - if: runner.os == 'Linux'
+        run: |
+          gh release upload "$TAG" --clobber \
+            target/${{ matrix.target }}/release/bundle/appimage/*.AppImage \
+            target/${{ matrix.target }}/release/bundle/deb/*.deb
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
