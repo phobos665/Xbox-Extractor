@@ -31,6 +31,12 @@ jobs:
             target: x86_64-pc-windows-msvc
             rust-targets: x86_64-pc-windows-msvc
             bundle: --no-bundle
+          # 22.04 rather than latest: an AppImage runs only on glibc as new as the one it was
+          # built against, and the oldest runner reaches the most distributions.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            rust-targets: x86_64-unknown-linux-gnu
+            bundle: --bundles appimage,deb
     runs-on: ${{ matrix.os }}
     env:
       # Read by app/scripts/build-sidecar.mjs so extract-xiso is built for the same target.
@@ -41,6 +47,12 @@ jobs:
         with:
           targets: ${{ matrix.rust-targets }}
       - uses: Swatinem/rust-cache@v2
+      # Tauri's Linux prerequisites (WebKitGTK and friends); `file` is for the AppImage bundler.
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev file
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -66,4 +78,6 @@ jobs:
           if-no-files-found: error
           path: |
             target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            target/${{ matrix.target }}/release/bundle/deb/*.deb
             portable/
