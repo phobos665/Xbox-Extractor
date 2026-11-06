@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 
 use tokio::io::AsyncReadExt;
 
-use crate::ftp::{join, XboxFtp};
+use crate::ftp::{join, retrying, XboxFtp};
 use crate::ftpfs::{Cancel, IsoProgress, ProgressFn};
 use crate::iso::part_path;
+use crate::space;
 use crate::{Error, Result};
 
 const CHUNK: usize = 1 << 20;
@@ -82,6 +83,7 @@ async fn copy_into(
         ndirs += 1;
         progress(IsoProgress::Listing { dirs: ndirs, files: files.len() as u64, bytes: total });
     }
+    space::check_local(part, total)?;
 
     let mut done = 0u64;
     let mut buf = vec![0u8; CHUNK];
@@ -112,6 +114,9 @@ pub async fn copy_file(
     cancel: Cancel,
 ) -> Result<u64> {
     let part = part_path(out);
+    if let Some(dir) = out.parent() {
+        space::check_local(dir, size)?;
+    }
     progress(IsoProgress::Copying { file: remote.to_string(), done: 0, total: size });
     let mut buf = vec![0u8; CHUNK];
     let result = fetch_file(ftp, remote, size, &part, &mut buf, &cancel, |n| {
@@ -131,7 +136,8 @@ pub async fn copy_file(
     }
 }
 
-/// Downloads one file to `dest`, calling `on_bytes` with the bytes received so far.
+/// Downloads one file to `dest`, calling `on_bytes` with the bytes received so far. A file
+/// cut off by a dropped connection is fetched again from the start.
 async fn fetch_file(
     ftp: &mut XboxFtp,
     remote: &str,
@@ -141,6 +147,18 @@ async fn fetch_file(
     cancel: &Cancel,
     mut on_bytes: impl FnMut(u64),
 ) -> Result<()> {
+    retrying!(ftp, format!("reading {remote}"), |s| fetch_once(s, remote, size, dest, buf, cancel, &mut on_bytes))
+}
+
+async fn fetch_once(
+    ftp: &mut XboxFtp,
+    remote: &str,
+    size: u64,
+    dest: &Path,
+    buf: &mut [u8],
+    cancel: &Cancel,
+    on_bytes: &mut impl FnMut(u64),
+) -> Result<()> {
     let mut out = BufWriter::with_capacity(CHUNK, File::create(dest)?);
     if size == 0 {
         return Ok(());
@@ -149,6 +167,7 @@ async fn fetch_file(
     let mut stream = ftp.open_read(remote, 0).await?;
     let timeout = ftp.timeout();
     let mut copied = 0u64;
+    on_bytes(0);
     let result: Result<()> = async {
         loop {
             if cancel.is_cancelled() {
@@ -172,7 +191,8 @@ async fn fetch_file(
     end?;
     out.flush()?;
     if copied != size {
-        return Err(Error::ShortRead { path: remote.to_string(), expected: size, got: copied });
+        // Short reads are what a connection dropped mid-file looks like on some servers.
+        return Err(Error::Transient(format!("{remote}: expected {size} bytes, the Xbox sent {copied}")));
     }
     Ok(())
 }

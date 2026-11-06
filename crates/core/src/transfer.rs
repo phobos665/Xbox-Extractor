@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
 
 use crate::copy;
-use crate::ftp::{join, split, XboxFtp};
+use crate::space;
+use crate::ftp::{join, retrying, split, XboxFtp};
 use crate::ftpfs::{Cancel, IsoProgress, ProgressFn};
 use crate::{Error, Result};
 
@@ -115,6 +116,8 @@ pub async fn upload(
         )));
     }
 
+    check_xbox_space(ftp, remote_dir, &top, meta.is_dir(), &files).await?;
+
     for d in &dirs {
         ensure_dir(ftp, d).await?;
     }
@@ -149,6 +152,31 @@ async fn ensure_dir(ftp: &mut XboxFtp, path: &str) -> Result<()> {
     }
 }
 
+/// Checks the Xbox drive `remote_dir` is on has room for `files`, when the server says how
+/// much it has (see [`XboxFtp::free_space`]). A single file that replaces one of the same name
+/// gives that file's space back.
+async fn check_xbox_space(ftp: &mut XboxFtp, remote_dir: &str, top: &str, is_dir: bool, files: &[LocalFile]) -> Result<()> {
+    let Some(drive) = space::remote_drive(remote_dir) else { return Ok(()) };
+    let Some(free) = ftp.free_space(&drive).await else {
+        log::info!("the server does not report free space on {drive}:; not checking");
+        return Ok(());
+    };
+    let needed: u64 = files.iter().map(|f| space::fatx_size(f.size)).sum();
+    let mut available = free;
+    if !is_dir {
+        let name = split(top).1;
+        if let Some(old) = ftp.list_dir(remote_dir).await?.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(name)) {
+            available += space::fatx_size(old.size);
+        }
+    }
+    if needed > available {
+        return Err(Error::NoSpace { place: format!("the Xbox's {drive}: drive"), needed, free });
+    }
+    Ok(())
+}
+
+/// Sends one file, starting it again if the connection drops partway. A file that cannot be
+/// sent is deleted from the Xbox, so it does not leave a truncated copy that looks complete.
 async fn send_file(
     ftp: &mut XboxFtp,
     f: &LocalFile,
@@ -156,10 +184,28 @@ async fn send_file(
     cancel: &Cancel,
     mut on_bytes: impl FnMut(u64),
 ) -> Result<()> {
+    let r = retrying!(ftp, format!("sending {}", f.remote), |s| send_once(s, f, buf, cancel, &mut on_bytes));
+    if r.is_err() {
+        // As with downloads, a stopped upload leaves the control connection in doubt.
+        if ftp.reconnect().await.is_ok() {
+            let _ = ftp.remove_file(&f.remote).await;
+        }
+    }
+    r
+}
+
+async fn send_once(
+    ftp: &mut XboxFtp,
+    f: &LocalFile,
+    buf: &mut [u8],
+    cancel: &Cancel,
+    on_bytes: &mut impl FnMut(u64),
+) -> Result<()> {
     let mut src = File::open(&f.local)?;
     let mut stream = ftp.open_write(&f.remote).await?;
     let timeout = ftp.timeout();
     let mut sent = 0u64;
+    on_bytes(0);
     let result: Result<()> = async {
         loop {
             if cancel.is_cancelled() {
@@ -181,11 +227,8 @@ async fn send_file(
     match result {
         Ok(()) => ftp.finish_write(stream, &f.remote).await,
         Err(e) => {
-            // As with downloads, a stopped upload leaves the control connection in doubt.
+            // The session is in doubt; the retry, or the caller's clean-up, logs in afresh.
             drop(stream);
-            if ftp.reconnect().await.is_ok() {
-                let _ = ftp.remove_file(&f.remote).await;
-            }
             Err(e)
         }
     }

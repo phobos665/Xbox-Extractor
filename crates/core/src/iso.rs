@@ -48,7 +48,8 @@ async fn build(
 ) -> Result<u64> {
     let mut image = IsoWriter::create(part)?;
     {
-        let mut fs = FtpFilesystem::new(ftp, remote_root, progress.clone(), cancel.clone());
+        let dir = part.parent().map(Path::to_path_buf).unwrap_or_default();
+        let mut fs = FtpFilesystem::new(ftp, remote_root, progress.clone(), cancel.clone()).check_space_in(dir);
         xdvdfs::write::img::create_xdvdfs_image(&mut fs, &mut image, |_| {})
             .await
             .map_err(Error::from)?;

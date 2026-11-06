@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the app's Info.plist by tauri build. -->
+<plist version="1.0">
+<dict>
+  <!-- macOS 15+ asks the user before an app may connect to devices on the local network,
+       and shows this text. Without it the Xbox is unreachable from the app. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Xbox ISO Batcher connects to your Xbox's FTP server on your local network to list your games and copy them.</string>
+</dict>
+</plist>

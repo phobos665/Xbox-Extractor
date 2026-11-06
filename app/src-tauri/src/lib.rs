@@ -29,7 +29,11 @@ fn err<E: std::fmt::Display>(e: E) -> String {
 
 #[derive(Default)]
 struct Session {
+    /// Scanning, covers and folder sizes.
     ftp: Mutex<Option<XboxFtp>>,
+    /// The Files tab, opened on first use. Kept apart from `ftp` so browsing does not wait
+    /// behind a scan, or behind the cover and size requests that follow one.
+    files: Mutex<Option<XboxFtp>>,
     info: std::sync::Mutex<Option<ConnectionInfo>>,
     /// What the last scan found, keyed by `scan::cache_key`.
     titles: std::sync::Mutex<HashMap<String, Title>>,
@@ -113,6 +117,9 @@ async fn connect(
     if let Some(old) = session.ftp.lock().await.replace(ftp) {
         old.quit().await;
     }
+    if let Some(old) = session.files.lock().await.take() {
+        old.quit().await;
+    }
     *session.info.lock().unwrap() = Some(info.clone());
     jobs.set_connection(Some(info.clone()));
 
@@ -128,6 +135,9 @@ async fn connect(
 #[tauri::command]
 async fn disconnect(session: State<'_, Session>, jobs: State<'_, Arc<Jobs>>) -> CmdResult<()> {
     if let Some(f) = session.ftp.lock().await.take() {
+        f.quit().await;
+    }
+    if let Some(f) = session.files.lock().await.take() {
         f.quit().await;
     }
     *session.info.lock().unwrap() = None;

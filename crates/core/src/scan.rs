@@ -171,12 +171,12 @@ where
                     on_event(ScanEvent::Skipped { path: dir.clone(), reason: e });
                     continue;
                 }
-                Err(Error::Timeout(what)) => {
-                    // One slow folder should not end the scan. The session may be mid-reply, so
-                    // start a fresh one and move on.
-                    log::warn!("{what} timed out; skipping {dir}");
+                Err(e) if e.is_transient() => {
+                    // One folder that still fails after the session's own retries should not
+                    // end the scan. The session may be mid-reply, so start a fresh one and move on.
+                    log::warn!("skipping {dir}: {e}");
                     ftp.reconnect().await?;
-                    on_event(ScanEvent::Skipped { path: dir.clone(), reason: format!("timed out: {what}") });
+                    on_event(ScanEvent::Skipped { path: dir.clone(), reason: e.to_string() });
                     continue;
                 }
                 Err(e) => return Err(e),
