@@ -20,6 +20,15 @@ fn is_month(s: &str) -> bool {
     MONTHS.contains(&s.to_ascii_lowercase().as_str())
 }
 
+/// `2001-01-01`.
+fn is_iso_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b.iter().enumerate().all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+}
+
 /// Splits `s` into whitespace-separated tokens, returning each token with the byte offset just
 /// past it, so the remainder of the line (a name with spaces) can be sliced off intact.
 fn tokens(s: &str) -> Vec<(&str, usize)> {
@@ -51,13 +60,20 @@ fn parse_unix(line: &str) -> Option<ListEntry> {
     if !matches!(kind, 'd' | '-' | 'l') || first.len() < 10 {
         return None;
     }
-    // Find the month; size is the token before it, the name starts three tokens after it.
-    let m = t.iter().position(|(tok, _)| is_month(tok))?;
-    if m < 2 || m + 2 >= t.len() {
+    // Find the date; size is the token before it. A month name (`Jan 01 2001`) starts a
+    // three-token date; some servers print an ISO date and a time (`2001-01-01 12:00`) instead.
+    let (m, date_len) = match t.iter().position(|(tok, _)| is_month(tok)) {
+        Some(m) => (m, 3),
+        None => (t.iter().position(|(tok, _)| is_iso_date(tok))?, 2),
+    };
+    if m < 2 || m + date_len > t.len() {
         return None;
     }
     let size: u64 = t[m - 1].0.parse().ok()?;
-    let mut name = rest_after(line, t[m + 2].1);
+    let mut name = rest_after(line, t[m + date_len - 1].1);
+    if name.is_empty() {
+        return None;
+    }
     if kind == 'l' {
         if let Some(i) = name.find(" -> ") {
             name = &name[..i];
@@ -143,6 +159,14 @@ mod tests {
         let e = parse_line("-rwxrwxrwx 1 owner group 4294967296 Dec 31 23:59  two  spaces.bin").unwrap();
         assert_eq!(e.name, "two  spaces.bin");
         assert_eq!(e.size, 4_294_967_296);
+    }
+
+    #[test]
+    fn unix_with_iso_dates() {
+        let e = parse_line("drwxrwxrwx 1 xbox xbox 0 2004-11-10 12:00 Halo 2").unwrap();
+        assert_eq!(e, ListEntry { name: "Halo 2".into(), is_dir: true, size: 0 });
+        let e = parse_line("-rw-rw-rw- 1 xbox xbox 4096 2004-11-10 12:00 default.xbe").unwrap();
+        assert_eq!(e, ListEntry { name: "default.xbe".into(), is_dir: false, size: 4096 });
     }
 
     #[test]

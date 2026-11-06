@@ -252,7 +252,7 @@ impl Jobs {
                 done.message = Some("not connected to an Xbox".into());
                 return done;
             };
-            match XboxFtp::connect(&info).await {
+            match XboxFtp::connect_patiently(&info, XboxFtp::DEFAULT_TIMEOUT).await {
                 Ok(f) => *ftp = Some(f),
                 Err(e) => {
                     done.state = JobState::Failed;

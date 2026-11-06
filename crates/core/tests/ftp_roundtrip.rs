@@ -398,3 +398,128 @@ async fn cancelled_upload_removes_the_partial_file() {
     assert!(!xbox.path().join("E/big.bin").exists());
     assert!(!ftp.list_dir("/E").await.unwrap().is_empty());
 }
+
+/// What [`flaky_proxy`] does to the first command with a given verb.
+#[derive(Clone, Copy)]
+enum Fault {
+    /// Answers `502` instead of passing the command on, as Xbox servers do now and then.
+    Refuse,
+    /// Hangs up the session, as a server that dropped an idle session has.
+    HangUp,
+}
+
+/// A control-connection proxy in front of the FTP server on `upstream` that misbehaves the way
+/// Xbox servers do. Each fault applies once, to the first command with its verb, across all
+/// sessions. `greeting` lines are put in front of the server's greeting. Data connections go
+/// straight to the server: the client connects to the port from `PASV` on the proxy's address,
+/// which is the server's too.
+async fn flaky_proxy(upstream: u16, faults: &[(&'static str, Fault)], greeting: &'static str) -> ConnectionInfo {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::{TcpListener, TcpStream};
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let faults = Arc::new(Mutex::new(faults.iter().map(|&(v, f)| (v, Some(f))).collect::<Vec<_>>()));
+    tokio::spawn(async move {
+        loop {
+            let (client, _) = listener.accept().await.unwrap();
+            let server = TcpStream::connect(("127.0.0.1", upstream)).await.unwrap();
+            let faults = faults.clone();
+            tokio::spawn(async move {
+                let (client_r, client_w) = client.into_split();
+                let (server_r, mut server_w) = server.into_split();
+                let client_w = Arc::new(tokio::sync::Mutex::new(client_w));
+                let to_client = client_w.clone();
+                let replies = tokio::spawn(async move {
+                    let mut lines = BufReader::new(server_r).lines();
+                    let mut first = true;
+                    while let Ok(Some(l)) = lines.next_line().await {
+                        let mut w = to_client.lock().await;
+                        if std::mem::take(&mut first) {
+                            let _ = w.write_all(greeting.as_bytes()).await;
+                        }
+                        if w.write_all(format!("{l}\r\n").as_bytes()).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                let mut lines = BufReader::new(client_r).lines();
+                while let Ok(Some(l)) = lines.next_line().await {
+                    let verb = l.split(' ').next().unwrap_or("").to_ascii_uppercase();
+                    let fault = faults.lock().unwrap().iter_mut().find(|(v, f)| *v == verb && f.is_some()).and_then(|(_, f)| f.take());
+                    match fault {
+                        Some(Fault::Refuse) => {
+                            let _ = client_w.lock().await.write_all(b"502 Command not implemented.\r\n").await;
+                        }
+                        Some(Fault::HangUp) => break,
+                        None => {
+                            if server_w.write_all(format!("{l}\r\n").as_bytes()).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+                replies.abort();
+                let _ = client_w.lock().await.shutdown().await;
+            });
+        }
+    });
+    ConnectionInfo::new("127.0.0.1").with_port(port)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovers_from_502s_and_dropped_sessions() {
+    use xib_core::transfer;
+
+    let xbox = tempfile::tempdir().unwrap();
+    let game = make_tree(xbox.path());
+    let server = start_server(xbox.path().to_path_buf(), 50900..=50940).await;
+    let faults = [("CWD", Fault::HangUp), ("LIST", Fault::Refuse), ("RETR", Fault::Refuse), ("STOR", Fault::Refuse), ("MKD", Fault::HangUp)];
+    let info = flaky_proxy(server.port, &faults, "").await;
+    let mut ftp = XboxFtp::connect(&info).await.unwrap();
+    let none: ProgressFn = Arc::new(|_| {});
+
+    // The first CWD loses the session and the first LIST is refused; the listing still arrives.
+    let names: Vec<String> = ftp.list_dir("/F/Games").await.unwrap().into_iter().map(|e| e.name).collect();
+    assert_eq!(names, vec!["Test Game".to_string()]);
+
+    ftp.mkdir("/E/Apps").await.unwrap();
+    assert!(xbox.path().join("E/Apps").is_dir());
+
+    let pc = tempfile::tempdir().unwrap();
+    let one = pc.path().join("notes.bin");
+    std::fs::write(&one, pattern(300_000, 9)).unwrap();
+    transfer::upload(&mut ftp, &one, "/E/Apps", none.clone(), Cancel::new()).await.unwrap();
+    assert_eq!(std::fs::read(xbox.path().join("E/Apps/notes.bin")).unwrap(), std::fs::read(&one).unwrap());
+
+    let back = pc.path().join("Game");
+    transfer::download(&mut ftp, "/F/Games/Test Game", true, 0, &back, none.clone(), Cancel::new()).await.unwrap();
+    assert_eq!(
+        std::fs::read(back.join("media/big.bin")).unwrap(),
+        std::fs::read(game.join("media/big.bin")).unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn upload_refused_when_the_xbox_drive_is_full() {
+    use xib_core::transfer;
+
+    let xbox = tempfile::tempdir().unwrap();
+    make_tree(xbox.path());
+    let server = start_server(xbox.path().to_path_buf(), 50950..=50990).await;
+    let greeting = "220-Drive E:  Used: 7.50GB  Free: 1.00MB\r\n220-Drive F:  Used: 1.00GB  Free: 100.00GB\r\n";
+    let info = flaky_proxy(server.port, &[], greeting).await;
+    let mut ftp = XboxFtp::connect(&info).await.unwrap();
+    let none: ProgressFn = Arc::new(|_| {});
+
+    let pc = tempfile::tempdir().unwrap();
+    let big = pc.path().join("big.bin");
+    std::fs::write(&big, pattern(2 * 1024 * 1024, 2)).unwrap();
+    let err = transfer::upload(&mut ftp, &big, "/E", none.clone(), Cancel::new()).await.unwrap_err();
+    assert!(matches!(err, xib_core::Error::NoSpace { .. }), "{err}");
+    assert!(!xbox.path().join("E/big.bin").exists());
+
+    // F: has room.
+    transfer::upload(&mut ftp, &big, "/F", none, Cancel::new()).await.unwrap();
+    assert!(xbox.path().join("F/big.bin").exists());
+}

@@ -6,6 +6,7 @@
 //! is staged on local disk.
 
 use std::io;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -15,6 +16,7 @@ use xdvdfs::blockdev::BlockDeviceWrite;
 use xdvdfs::write::fs::{FileEntry, FileType, Filesystem, PathVec};
 
 use crate::ftp::{join, XboxFtp};
+use crate::space;
 use crate::{Error, Result};
 
 const CHUNK: usize = 1 << 20;
@@ -58,6 +60,8 @@ pub struct FtpFilesystem<'a> {
     files: u64,
     total: u64,
     done: u64,
+    /// The local folder the image is written in, checked for room before the first file.
+    space_dir: Option<PathBuf>,
 }
 
 impl<'a> FtpFilesystem<'a> {
@@ -71,7 +75,15 @@ impl<'a> FtpFilesystem<'a> {
             files: 0,
             total: 0,
             done: 0,
+            space_dir: None,
         }
+    }
+
+    /// Checks, once the tree is walked and before any file is fetched, that the local disk
+    /// holding `dir` has room for the image.
+    pub fn check_space_in(mut self, dir: PathBuf) -> Self {
+        self.space_dir = Some(dir);
+        self
     }
 
     pub fn total_bytes(&self) -> u64 {
@@ -84,6 +96,57 @@ impl<'a> FtpFilesystem<'a> {
 
     fn check_cancel(&self) -> Result<()> {
         if self.cancel.is_cancelled() { Err(Error::Cancelled) } else { Ok(()) }
+    }
+
+    /// Fetches one file into the image at `offset`. On failure, takes back the progress it
+    /// reported, so a retry counts from where the file started.
+    async fn copy_once<W>(&mut self, remote: &str, dest: &mut W, offset: u64, size: u64) -> Result<u64>
+    where
+        W: BlockDeviceWrite<io::Error>,
+    {
+        let start = self.done;
+        let mut stream = self.ftp.open_read(remote, 0).await?;
+        let mut buf = vec![0u8; CHUNK];
+        let mut copied = 0u64;
+        let timeout = self.ftp.timeout();
+        let result: Result<()> = async {
+            loop {
+                self.check_cancel()?;
+                let n = match tokio::time::timeout(timeout, stream.read(&mut buf)).await {
+                    Ok(r) => r?,
+                    Err(_) => return Err(Error::Timeout(format!("reading {remote}"))),
+                };
+                if n == 0 {
+                    return Ok(());
+                }
+                let take = (n as u64).min(size.saturating_sub(copied)) as usize;
+                if take > 0 {
+                    dest.write(offset + copied, &buf[..take]).await?;
+                }
+                copied += n as u64;
+                self.done += take as u64;
+                (self.progress)(IsoProgress::Copying {
+                    file: remote.to_string(),
+                    done: self.done,
+                    total: self.total,
+                });
+            }
+        }
+        .await;
+
+        let complete = result.is_ok();
+        let end = self.ftp.end_transfer(stream, complete).await;
+        let checked = result.and(end).and_then(|()| {
+            if copied != size {
+                // Short reads are what a connection dropped mid-file looks like on some servers.
+                return Err(Error::Transient(format!("{remote}: expected {size} bytes, the Xbox sent {copied}")));
+            }
+            Ok(copied)
+        });
+        if checked.is_err() {
+            self.done = start;
+        }
+        checked
     }
 }
 
@@ -113,49 +176,26 @@ where
 
     async fn copy_file_in(&mut self, src: &PathVec, dest: &mut W, offset: u64, size: u64) -> Result<u64> {
         self.check_cancel()?;
+        if let Some(dir) = self.space_dir.take() {
+            // Each file is padded to a 2 KiB sector, and the directory tables take a little more.
+            space::check_local(&dir, self.total + self.files * 2048 + (1 << 20))?;
+        }
         let remote = self.remote(src);
         (self.progress)(IsoProgress::Copying { file: remote.clone(), done: self.done, total: self.total });
         if size == 0 {
             return Ok(0);
         }
-
-        let mut stream = self.ftp.open_read(&remote, 0).await?;
-        let mut buf = vec![0u8; CHUNK];
-        let mut copied = 0u64;
-        let timeout = self.ftp.timeout();
-        let result: Result<()> = async {
-            loop {
-                self.check_cancel()?;
-                let n = match tokio::time::timeout(timeout, stream.read(&mut buf)).await {
-                    Ok(r) => r?,
-                    Err(_) => return Err(Error::Timeout(format!("reading {remote}"))),
-                };
-                if n == 0 {
-                    return Ok(());
+        // A file cut off by a dropped connection is fetched again from the start, into the
+        // same place in the image.
+        let mut attempt = 0;
+        loop {
+            match self.copy_once(&remote, dest, offset, size).await {
+                Err(e) if e.is_transient() => {
+                    self.ftp.recover(&mut attempt, e, &format!("reading {remote}")).await?;
                 }
-                let take = (n as u64).min(size.saturating_sub(copied)) as usize;
-                if take > 0 {
-                    dest.write(offset + copied, &buf[..take]).await?;
-                }
-                copied += n as u64;
-                self.done += take as u64;
-                (self.progress)(IsoProgress::Copying {
-                    file: remote.clone(),
-                    done: self.done,
-                    total: self.total,
-                });
+                r => return r,
             }
         }
-        .await;
-
-        let complete = result.is_ok();
-        let end = self.ftp.end_transfer(stream, complete).await;
-        result?;
-        end?;
-        if copied != size {
-            return Err(Error::ShortRead { path: remote, expected: size, got: copied });
-        }
-        Ok(copied)
     }
 
     async fn copy_file_buf(&mut self, src: &PathVec, buf: &mut [u8], offset: u64) -> Result<u64> {
